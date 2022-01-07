@@ -9,11 +9,14 @@
     "node": ">=8.9.0"
   },
   "dependencies": {
+    "@feathersjs/feathers": "^4.5.11",
+    "@feathersjs/socketio-client": "^4.5.11",
     "@tensorflow-models/handpose": "file:../dist",
-    "@tensorflow/tfjs-core": "^3.3.0",
-    "@tensorflow/tfjs-converter": "^3.3.0",
+    "@tensorflow/tfjs-backend-wasm": "^3.3.0",
     "@tensorflow/tfjs-backend-webgl": "^3.3.0",
-    "@tensorflow/tfjs-backend-wasm": "^3.3.0"
+    "@tensorflow/tfjs-converter": "^3.3.0",
+    "@tensorflow/tfjs-core": "^3.3.0",
+    "socket.io-client": "^2.4.0"
   },
   "scripts": {
     "watch": "cross-env NODE_ENV=development parcel index.html --no-hmr ",
@@ -33,12 +36,12 @@
     "babel-preset-env": "^1.7.0",
     "clang-format": "~1.2.2",
     "cross-env": "^5.2.0",
+    "dat.gui": "~0.7.2",
     "eslint": "^4.19.1",
     "eslint-config-google": "^0.9.1",
     "parcel-bundler": "1.12.5",
     "parcel-plugin-static-files-copy": "^2.5.1",
-    "yalc": "~1.0.0-pre.50",
-    "dat.gui": "~0.7.2"
+    "yalc": "~1.0.0-pre.50"
   },
   "resolutions": {
     "is-svg": "4.3.1"

@@ -19,6 +19,14 @@ import * as handpose from '@tensorflow-models/handpose';
 import * as tf from '@tensorflow/tfjs-core';
 import * as tfjsWasm from '@tensorflow/tfjs-backend-wasm';
 import '@tensorflow/tfjs-backend-webgl';
+import io from 'socket.io-client';
+import feathers from '@feathersjs/feathers';
+import socketio from '@feathersjs/socketio-client';
+
+let feathersClient;
+const clientColor = `#${Math.floor(Math.random()*16777215).toString(16)}`;
+
+let hands = {};
 
 function isMobile() {
   const isAndroid = /Android/i.test(navigator.userAgent);
@@ -45,9 +53,6 @@ let videoWidth, videoHeight, rafID, ctx, canvas, ANCHOR_POINTS,
 const VIDEO_WIDTH = 640;
 const VIDEO_HEIGHT = 500;
 const mobile = isMobile();
-// Don't render the point cloud on mobile in order to maximize performance and
-// to avoid crowding limited screen space.
-const renderPointcloud = mobile === false;
 
 const state = {
   backend: 'webgl'
@@ -55,54 +60,21 @@ const state = {
 
 const stats = new Stats();
 stats.showPanel(0);
-document.body.appendChild(stats.dom);
+// document.body.appendChild(stats.dom);
 
-if (renderPointcloud) {
-  state.renderPointcloud = true;
-}
-
-function setupDatGui() {
-  const gui = new dat.GUI();
-  gui.add(state, 'backend', ['webgl', 'wasm'])
-      .onChange(async backend => {
-        window.cancelAnimationFrame(rafID);
-        await tf.setBackend(backend);
-        await addFlagLabels();
-        landmarksRealTime(video);
-      });
-
-  if (renderPointcloud) {
-    gui.add(state, 'renderPointcloud').onChange(render => {
-      document.querySelector('#scatter-gl-container').style.display =
-          render ? 'inline-block' : 'none';
-    });
-  }
-}
-
-function drawPoint(y, x, r) {
-  ctx.beginPath();
-  ctx.arc(x, y, r, 0, 2 * Math.PI);
-  ctx.fill();
-}
-
-function drawKeypoints(keypoints) {
-  const keypointsArray = keypoints;
-
-  for (let i = 0; i < keypointsArray.length; i++) {
-    const y = keypointsArray[i][0];
-    const x = keypointsArray[i][1];
-    drawPoint(x - 2, y - 2, 3);
-  }
-
+function drawKeypoints(keypoints, color) {
   const fingers = Object.keys(fingerLookupIndices);
   for (let i = 0; i < fingers.length; i++) {
     const finger = fingers[i];
     const points = fingerLookupIndices[finger].map(idx => keypoints[idx]);
-    drawPath(points, false);
+    drawPath(points, false, color);
   }
 }
 
-function drawPath(points, closePath) {
+function drawPath(points, closePath, color) {
+  ctx.beginPath();
+  ctx.lineWidth = 16;
+  ctx.strokeStyle = color;
   const region = new Path2D();
   region.moveTo(points[0][0], points[0][1]);
   for (let i = 1; i < points.length; i++) {
@@ -114,6 +86,7 @@ function drawPath(points, closePath) {
     region.closePath();
   }
   ctx.stroke(region);
+  ctx.closePath();
 }
 
 let model;
@@ -149,26 +122,10 @@ async function loadVideo() {
   video.play();
   return video;
 }
-async function addFlagLabels() {
-  if(!document.querySelector("#simd_supported")) {
-    const simdSupportLabel = document.createElement("div");
-    simdSupportLabel.id = "simd_supported";
-    simdSupportLabel.style = "font-weight: bold";
-    const simdSupported = await tf.env().getAsync('WASM_HAS_SIMD_SUPPORT');
-    simdSupportLabel.innerHTML = `SIMD supported: <span class=${simdSupported}>${simdSupported}<span>`;
-    document.querySelector("#info").appendChild(simdSupportLabel);
-  }
-
-  if(!document.querySelector("#threads_supported")) {
-    const threadSupportLabel = document.createElement("div");
-    threadSupportLabel.id = "threads_supported";
-    threadSupportLabel.style = "font-weight: bold";
-    const threadsSupported = await tf.env().getAsync('WASM_HAS_MULTITHREAD_SUPPORT');
-    threadSupportLabel.innerHTML = `Threads supported: <span class=${threadsSupported}>${threadsSupported}</span>`;
-    document.querySelector("#info").appendChild(threadSupportLabel);
-  }
-}
 async function main() {
+  info.textContent = 'Initializing things... this might take a while!';
+  info.style.display = 'block';
+
   await tf.setBackend(state.backend);
   if (!tf.env().getAsync('WASM_HAS_SIMD_SUPPORT') && state.backend == "wasm") {
     console.warn("The backend is set to WebAssembly and SIMD support is turned off.\nThis could bottleneck your performance greatly, thus to prevent this enable SIMD Support in chrome://flags");
@@ -178,28 +135,46 @@ async function main() {
 
   try {
     video = await loadVideo();
+    pageInfo.style.display = 'block';
+    info.textContent = 'Send this URL to someone, invite them to join you and show a hand to the webcam.';
+    info.style.display = 'block';
   } catch (e) {
     let info = document.getElementById('info');
     info.textContent = e.message;
     info.style.display = 'block';
-    throw e;
+    // throw e;
   }
 
-  setupDatGui();
+  const socket = io('https://talktothehand.hyper.fail');
+  feathersClient = feathers();
 
-  videoWidth = video.videoWidth;
-  videoHeight = video.videoHeight;
+  feathersClient.configure(socketio(socket));
+  feathersClient
+    .service('messages')
+    .on('created', (message) => {
+      const {predictions, user} = message;
+      if (predictions && predictions.length && user !== clientColor) {
+        hands[user] = predictions;
+      }
+    });
+
+  // setupDatGui();
+
+  videoWidth = video ? video.videoWidth : 640;
+  videoHeight = video ? video.videoHeight : 480;
 
   canvas = document.getElementById('output');
   canvas.width = videoWidth;
   canvas.height = videoHeight;
-  video.width = videoWidth;
-  video.height = videoHeight;
+  if (video) {
+    video.width = videoWidth;
+    video.height = videoHeight;
+  }
 
   ctx = canvas.getContext('2d');
   ctx.clearRect(0, 0, videoWidth, videoHeight);
-  ctx.strokeStyle = 'red';
-  ctx.fillStyle = 'red';
+  ctx.strokeStyle = clientColor;
+  ctx.fillStyle = clientColor;
 
   ctx.translate(canvas.width, 0);
   ctx.scale(-1, 1);
@@ -211,56 +186,49 @@ async function main() {
     [-VIDEO_WIDTH, -VIDEO_HEIGHT, 0]
   ];
 
-  if (renderPointcloud) {
-    document.querySelector('#scatter-gl-container').style =
-        `width: ${VIDEO_WIDTH}px; height: ${VIDEO_HEIGHT}px;`;
-
-    scatterGL = new ScatterGL(
-        document.querySelector('#scatter-gl-container'),
-        {'rotateOnStart': false, 'selectEnabled': false});
-  }
-
   landmarksRealTime(video);
 }
 
 const landmarksRealTime = async (video) => {
+  let lastFrame;
   async function frameLandmarks() {
     stats.begin();
-    ctx.drawImage(
-        video, 0, 0, videoWidth, videoHeight, 0, 0, canvas.width,
-        canvas.height);
-    const predictions = await model.estimateHands(video);
-    if (predictions.length > 0) {
-      const result = predictions[0].landmarks;
-      drawKeypoints(result, predictions[0].annotations);
+    // const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    // ctx.clearRect(0, 0, canvas.width, canvas.height);
+    // if (lastFrame) {
+    //   // ctx.putImageData(
+    //   //   lastFrame, 0, 0, videoWidth, videoHeight, 0, 0, canvas.width,
+    //   //   canvas.height);
+    //
+    // }
+    const fillStyle = ctx.fillStyle;
+    ctx.beginPath();
+    ctx.fillStyle = '#ffffff99';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.closePath();
+    ctx.fillStyle = fillStyle;
+    // // const fillStyle = ctx.fillStyle;
+    // // ctx.fillStyle = '#ffffffcc';
+    // // ctx.fillRect(0, 0, canvas.width, canvas.height);
+    // // ctx.fillStyle = fillStyle;
 
-      if (renderPointcloud === true && scatterGL != null) {
-        const pointsData = result.map(point => {
-          return [-point[0], -point[1], -point[2]];
-        });
-
-        const dataset =
-            new ScatterGL.Dataset([...pointsData, ...ANCHOR_POINTS]);
-
-        if (!scatterGLHasInitialized) {
-          scatterGL.render(dataset);
-
-          const fingers = Object.keys(fingerLookupIndices);
-
-          scatterGL.setSequences(
-              fingers.map(finger => ({indices: fingerLookupIndices[finger]})));
-          scatterGL.setPointColorer((index) => {
-            if (index < pointsData.length) {
-              return 'steelblue';
-            }
-            return 'white';  // Hide.
-          });
-        } else {
-          scatterGL.updateDataset(dataset);
-        }
-        scatterGLHasInitialized = true;
+    if (video) {
+      const predictions = await model.estimateHands(video);
+      if (predictions.length > 0) {
+        feathersClient.service('messages').create({user: clientColor, predictions});
+        const result = predictions[0].landmarks;
+        drawKeypoints(result, clientColor + 'da');
       }
     }
+    let colors = Object.keys(hands);
+    for (const color of colors) {
+      let predictions = hands[color];
+      if (predictions.length) {
+        let result = predictions[0].landmarks;
+        drawKeypoints(result, color + 'da');
+      }
+    }
+    // lastFrame = ctx.getImageData(0, 0, canvas.width, canvas.height);
     stats.end();
     rafID = requestAnimationFrame(frameLandmarks);
   };
